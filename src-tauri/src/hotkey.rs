@@ -138,12 +138,24 @@ pub fn swap_hotkey(app: &AppHandle, new: &str, previous: Option<&str>) -> Result
     let shortcut: Shortcut = new
         .parse()
         .map_err(|_| AppError::msg(format!("Atalho inválido: {new}")))?;
+    // Mesma combinação (ex.: o key recorder grava de novo o atalho ativo): não
+    // dá para registrar antes de soltar, então o antigo sai primeiro.
+    let previous = match previous {
+        Some(prev) if prev.parse::<Shortcut>().ok() == Some(shortcut) => {
+            unregister(app, prev);
+            None
+        }
+        other => other,
+    };
+    // Registra o novo antes de soltar o antigo: se o SO recusar, o atalho que
+    // funcionava continua ativo.
+    app.global_shortcut()
+        .register(shortcut)
+        .map_err(|e| AppError::msg(format!("O sistema recusou o atalho: {e}")))?;
     if let Some(prev) = previous {
         unregister(app, prev);
     }
-    app.global_shortcut()
-        .register(shortcut)
-        .map_err(|e| AppError::msg(format!("O sistema recusou o atalho: {e}")))
+    Ok(())
 }
 
 /// Remove o registro de uma hotkey, se válida. Usado para "silenciar"
@@ -226,4 +238,30 @@ pub fn toggle_main_window_centered(app: &AppHandle) {
     let _ = window.show();
     let _ = window.set_focus();
     let _ = app.emit("fpaste://opened", ());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_hotkey_uses_the_platform_modifier() {
+        let hotkey = default_hotkey();
+        assert!(hotkey.starts_with("CommandOrControl+"));
+        assert!(hotkey.parse::<Shortcut>().is_ok(), "{hotkey} deve ser um atalho válido");
+    }
+
+    #[test]
+    fn recorder_shortcuts_parse() {
+        for s in ["CommandOrControl+K", "CommandOrControl+Shift+Space", "Alt+F4", "CommandOrControl+Quote"] {
+            assert!(s.parse::<Shortcut>().is_ok(), "{s}");
+        }
+    }
+
+    #[test]
+    fn garbage_shortcuts_are_rejected() {
+        for s in ["", "NaoExiste+K"] {
+            assert!(s.parse::<Shortcut>().is_err(), "{s}");
+        }
+    }
 }

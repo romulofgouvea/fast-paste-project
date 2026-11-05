@@ -26,7 +26,7 @@ describe("Settings Window", () => {
     
     // As abas principais do menu devem existir
     expect(screen.getByText("Aparência")).toBeDefined();
-    expect(screen.getByText("Atalhos")).toBeDefined();
+    expect(screen.getByText("Geral")).toBeDefined();
     expect(screen.getByText("Armazenamento")).toBeDefined();
     expect(screen.getByText("Backup")).toBeDefined();
 

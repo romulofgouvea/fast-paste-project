@@ -10,6 +10,19 @@ use crate::db::{self, ClipKind};
 use crate::error::AppError;
 use crate::AppState;
 
+/// Teto de bytes descompactados por entrada do zip — barra zip bombs no import.
+const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Remove o arquivo temporário ao sair do escopo, inclusive nos retornos
+/// antecipados por erro (`?`).
+struct TempFile(std::path::PathBuf);
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 #[derive(Serialize)]
 pub struct ImportSummary {
     pub imported: i64,
@@ -48,6 +61,7 @@ pub fn export_backup(
 
     let snapshot_path = state.data_dir.join("fpaste.backup.tmp.db");
     let _ = std::fs::remove_file(&snapshot_path);
+    let _snapshot_guard = TempFile(snapshot_path.clone());
     {
         let conn = state.db()?;
         conn.execute("VACUUM INTO ?1", [snapshot_path.to_string_lossy().as_ref()])?;
@@ -88,7 +102,6 @@ pub fn export_backup(
         }
     }
     zip.finish()?;
-    let _ = std::fs::remove_file(&snapshot_path);
     Ok(dest_path.display().to_string())
 }
 
@@ -121,13 +134,21 @@ pub fn import_backup(
                 .map_err(|_| AppError::msg("backup inválido ou senha incorreta"))?,
             None => archive.by_name(name)?,
         };
+        if zf.size() > MAX_ENTRY_BYTES {
+            return Err(AppError::msg("entrada do backup grande demais"));
+        }
+        // O tamanho declarado no cabeçalho pode mentir: limita a leitura real.
         let mut buf = Vec::new();
-        zf.read_to_end(&mut buf)?;
+        (&mut zf).take(MAX_ENTRY_BYTES + 1).read_to_end(&mut buf)?;
+        if buf.len() as u64 > MAX_ENTRY_BYTES {
+            return Err(AppError::msg("entrada do backup grande demais"));
+        }
         Ok(buf)
     };
 
     let db_bytes = read_entry(&mut archive, "fpaste.db", &password)?;
     let tmp_db = state.data_dir.join("fpaste.import.tmp.db");
+    let _tmp_guard = TempFile(tmp_db.clone());
     std::fs::write(&tmp_db, &db_bytes)?;
 
     let backup_conn = rusqlite::Connection::open(&tmp_db)?;
@@ -160,7 +181,6 @@ pub fn import_backup(
         collected
     };
     drop(backup_conn);
-    let _ = std::fs::remove_file(&tmp_db);
 
     let mut imported = 0i64;
     let mut skipped = 0i64;
@@ -201,4 +221,31 @@ pub fn import_backup(
     }
 
     Ok(ImportSummary { imported, skipped })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn temp_file_guard_removes_the_file_on_drop() {
+        let path = std::env::temp_dir().join(format!("fpaste-guard-{}.tmp", uuid::Uuid::new_v4()));
+        std::fs::write(&path, b"x").unwrap();
+        {
+            let _guard = TempFile(path.clone());
+            assert!(path.exists());
+        }
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn temp_file_guard_tolerates_a_missing_file() {
+        let path = std::env::temp_dir().join(format!("fpaste-missing-{}.tmp", uuid::Uuid::new_v4()));
+        drop(TempFile(path));
+    }
+
+    #[test]
+    fn zip_entry_cap_is_bounded() {
+        assert_eq!(MAX_ENTRY_BYTES, 512 * 1024 * 1024);
+    }
 }

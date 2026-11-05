@@ -29,14 +29,14 @@ export function domainOf(url: string): string {
   }
 }
 
-/** URL do favicon (via serviço do Google), ou "" se a URL for inválida. */
-export function faviconOf(url: string): string {
-  try {
-    const domain = new URL(url.startsWith("www.") ? `https://${url}` : url).hostname;
-    return `https://www.google.com/s2/favicons?domain=${domain}&sz=32`;
-  } catch {
-    return "";
-  }
+/**
+ * Favicon desligado de propósito: buscar o ícone num serviço externo revelaria
+ * o host de cada link copiado, e a CSP (`img-src 'self' data: blob:`) bloqueia
+ * a requisição. Os cartões caem no ícone padrão. Reativar exige buscar o ícone
+ * pelo backend, com opt-in.
+ */
+export function faviconOf(_url: string): string {
+  return "";
 }
 
 /** Deriva um "título" curto do conteúdo, conforme o tipo do item. */

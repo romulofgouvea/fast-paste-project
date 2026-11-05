@@ -22,3 +22,33 @@ Object.defineProperty(window, "matchMedia", {
     dispatchEvent: vi.fn(),
   })),
 });
+
+// jsdom não implementa IntersectionObserver nem scrollIntoView. O mock guarda
+// as instâncias para os testes dispararem a interseção manualmente.
+export class MockIntersectionObserver {
+  static instances: MockIntersectionObserver[] = [];
+  observed: Element[] = [];
+  disconnected = false;
+  constructor(public callback: IntersectionObserverCallback, public options?: IntersectionObserverInit) {
+    MockIntersectionObserver.instances.push(this);
+  }
+  observe(el: Element) {
+    this.observed.push(el);
+  }
+  unobserve() {}
+  disconnect() {
+    this.disconnected = true;
+  }
+  takeRecords() {
+    return [];
+  }
+  trigger(isIntersecting = true) {
+    this.callback([{ isIntersecting } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
+  }
+}
+(globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = MockIntersectionObserver;
+Element.prototype.scrollIntoView = vi.fn();
+
+afterEach(() => {
+  MockIntersectionObserver.instances = [];
+});

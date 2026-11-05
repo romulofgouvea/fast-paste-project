@@ -34,5 +34,8 @@ pub fn clear_history(state: State<'_, AppState>) -> Result<(), AppError> {
         conn.execute("DELETE FROM clipboard_history", [])?;
     }
     let _ = std::fs::remove_dir_all(state.data_dir.join("media"));
+    if let Ok(mut cache) = state.thumb_cache() {
+        cache.clear();
+    }
     Ok(())
 }

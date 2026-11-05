@@ -17,6 +17,29 @@ use crate::{crypto, db, media};
 
 const PREVIEW_LEN: usize = 300;
 
+/// Texto acima disto não é capturado (evita inflar o banco e a UI).
+const MAX_TEXT_BYTES: usize = 1024 * 1024;
+
+/// Formatos que gerenciadores de senha e apps sensíveis anexam ao clipboard
+/// para pedir que ele não seja registrado em históricos. Comparação sem
+/// diferenciar maiúsculas.
+const SENSITIVE_FORMATS: [&str; 5] = [
+    "ExcludeClipboardContentFromMonitorProcessing", // Windows
+    "Clipboard Viewer Ignore",                      // Windows (KeePass e outros)
+    "CanIncludeInClipboardHistory",                 // Windows (valor 0 = não incluir)
+    "org.nspasteboard.ConcealedType",               // macOS
+    "x-kde-passwordManagerHint",                    // Linux (KDE/Klipper)
+];
+
+/// `true` se a origem marcou o conteúdo como sensível/ocultável.
+fn is_sensitive(formats: &[String]) -> bool {
+    formats.iter().any(|f| {
+        SENSITIVE_FORMATS
+            .iter()
+            .any(|s| f.eq_ignore_ascii_case(s) || f.to_ascii_lowercase().contains(&s.to_ascii_lowercase()))
+    })
+}
+
 /// Classifica o conteúdo textual copiado em `Link`, `Code` ou `Text`.
 pub fn classify_text(text: &str) -> ClipKind {
     let trimmed = text.trim();
@@ -115,7 +138,7 @@ impl Monitor {
             Some(t) => t,
             None => return Ok(false),
         };
-        if text.trim().is_empty() {
+        if text.trim().is_empty() || text.len() > MAX_TEXT_BYTES {
             return Ok(false);
         }
         let item = db::NewItem {
@@ -174,6 +197,11 @@ impl ClipboardHandler for Monitor {
         if self.suppress.swap(false, Ordering::SeqCst) {
             return;
         }
+        if let Ok(formats) = self.ctx.available_formats() {
+            if is_sensitive(&formats) {
+                return;
+            }
+        }
         let captured = if self.ctx.has(ContentFormat::Image) {
             self.capture_image()
         } else {
@@ -223,6 +251,33 @@ pub fn spawn(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_sensitive_formats() {
+        let sensitive = vec!["CF_UNICODETEXT".to_string(), "org.nspasteboard.ConcealedType".to_string()];
+        assert!(is_sensitive(&sensitive));
+        assert!(!is_sensitive(&["text/plain".to_string()]));
+    }
+
+    #[test]
+    fn sensitive_match_is_case_insensitive_and_covers_each_platform() {
+        for name in [
+            "excludeclipboardcontentfrommonitorprocessing",
+            "Clipboard Viewer Ignore",
+            "x-kde-passwordManagerHint",
+        ] {
+            assert!(is_sensitive(&[name.to_string()]), "{name}");
+        }
+        assert!(!is_sensitive(&[]));
+        assert!(!is_sensitive(&["CF_UNICODETEXT".to_string(), "text/html".to_string()]));
+    }
+
+    #[test]
+    fn preview_is_capped_at_the_preview_length() {
+        let long = "x".repeat(PREVIEW_LEN * 2);
+        assert_eq!(make_preview(&long).chars().count(), PREVIEW_LEN);
+        assert_eq!(make_preview("curto"), "curto");
+    }
 
     #[test]
     fn classifies_urls() {

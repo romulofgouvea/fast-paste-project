@@ -14,13 +14,13 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Conferir versão x tag
         run: |
@@ -38,8 +38,27 @@ jobs:
           done
           [ "$fail" = 0 ]
 
+  # Auditoria de dependências: não bloqueia a release (advisories de crates
+  # transitivas do Tauri/GTK podem aparecer sem correção disponível), mas fica
+  # visível no log de cada tag.
+  audit:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: npm audit (produção)
+        run: npm audit --omit=dev
+
+      - name: cargo audit
+        run: |
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo audit --file src-tauri/Cargo.lock
+
   release:
     needs: check
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -53,7 +72,9 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Instalar dependências de sistema (Linux)
         if: matrix.platform == 'ubuntu-22.04'
@@ -75,17 +96,17 @@ jobs:
             xz-utils
 
       - name: Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
 
       - name: Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Cache do Cargo
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: "./src-tauri -> target"
 
@@ -93,7 +114,7 @@ jobs:
         run: npm ci
 
       - name: Build e publicação (tauri-action)
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:

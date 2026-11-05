@@ -23,15 +23,20 @@ fn put_on_clipboard_and_hide(
     state: &State<'_, AppState>,
     payload: ClipPayload,
 ) -> Result<(), AppError> {
-    // O watcher deve ignorar esta escrita — é o próprio FPaste copiando.
-    state.suppress_capture.store(true, Ordering::SeqCst);
     let ctx = ClipboardContext::new().map_err(AppError::msg)?;
-    match payload {
-        ClipPayload::Text(text) => ctx.set_text(text).map_err(AppError::msg)?,
-        ClipPayload::Image(bytes) => {
-            let image = RustImageData::from_bytes(&bytes).map_err(AppError::msg)?;
-            ctx.set_image(image).map_err(AppError::msg)?;
-        }
+    // O watcher deve ignorar esta escrita — é o próprio FPaste copiando. A flag
+    // só fica ligada enquanto a escrita pode gerar evento; se ela falhar, é
+    // desfeita, senão a próxima cópia de verdade seria descartada.
+    state.suppress_capture.store(true, Ordering::SeqCst);
+    let written = match payload {
+        ClipPayload::Text(text) => ctx.set_text(text).map_err(AppError::msg),
+        ClipPayload::Image(bytes) => RustImageData::from_bytes(&bytes)
+            .map_err(AppError::msg)
+            .and_then(|image| ctx.set_image(image).map_err(AppError::msg)),
+    };
+    if let Err(e) = written {
+        state.suppress_capture.store(false, Ordering::SeqCst);
+        return Err(e);
     }
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();

@@ -23,3 +23,11 @@ dist-ssr
 *.sln
 *.sw?
 .tokensave/*
+
+# Segredos e estado local de agentes
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.claude/

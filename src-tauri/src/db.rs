@@ -406,4 +406,124 @@ mod tests {
         let (items, _) = query_page(&conn, 0, 20, None, None, None).unwrap();
         assert_eq!(items[0].group_id, None);
     }
+
+    #[test]
+    fn pinned_items_come_first_then_newest() {
+        let conn = mem_db();
+        let (old, _) = insert_or_touch(&conn, &text_item("antigo")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let (new, _) = insert_or_touch(&conn, &text_item("novo")).unwrap();
+        toggle_pin(&conn, old).unwrap();
+
+        let (items, _) = query_page(&conn, 0, 20, None, None, None).unwrap();
+        assert_eq!(items[0].id, old);
+        assert_eq!(items[1].id, new);
+    }
+
+    #[test]
+    fn touching_an_existing_hash_moves_it_to_the_top() {
+        let conn = mem_db();
+        let (first, _) = insert_or_touch(&conn, &text_item("primeiro")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        insert_or_touch(&conn, &text_item("segundo")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+
+        let touched = touch_by_hash(&conn, &crate::crypto::sha256_hex(b"primeiro")).unwrap();
+        assert_eq!(touched, Some(first));
+        let (items, _) = query_page(&conn, 0, 20, None, None, None).unwrap();
+        assert_eq!(items[0].id, first);
+    }
+
+    #[test]
+    fn touch_by_hash_returns_none_for_unknown_hash() {
+        let conn = mem_db();
+        assert_eq!(touch_by_hash(&conn, "inexistente").unwrap(), None);
+    }
+
+    #[test]
+    fn touch_by_id_promotes_the_selected_item() {
+        let conn = mem_db();
+        let (first, _) = insert_or_touch(&conn, &text_item("a")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        insert_or_touch(&conn, &text_item("b")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+
+        touch_by_id(&conn, first).unwrap();
+        let (items, _) = query_page(&conn, 0, 20, None, None, None).unwrap();
+        assert_eq!(items[0].id, first);
+    }
+
+    fn image_item(path: &str) -> NewItem {
+        NewItem {
+            kind: ClipKind::Image,
+            content: None,
+            preview: None,
+            secure_file_path: Some(path.into()),
+            hash: format!("hash-{path}"),
+            size_bytes: 10,
+        }
+    }
+
+    #[test]
+    fn get_content_and_media_path_read_the_row() {
+        let conn = mem_db();
+        let (text_id, _) = insert_or_touch(&conn, &text_item("conteudo")).unwrap();
+        assert_eq!(get_content(&conn, text_id).unwrap(), Some("conteudo".to_string()));
+        assert_eq!(get_media_path(&conn, text_id).unwrap(), None);
+
+        let (image_id, _) = insert_or_touch(&conn, &image_item("media/abc.bin")).unwrap();
+        assert_eq!(get_media_path(&conn, image_id).unwrap(), Some("media/abc.bin".to_string()));
+    }
+
+    #[test]
+    fn delete_removes_the_row_and_returns_the_media_path() {
+        let conn = mem_db();
+        let (id, _) = insert_or_touch(&conn, &image_item("media/abc.bin")).unwrap();
+
+        assert_eq!(delete(&conn, id).unwrap(), Some("media/abc.bin".to_string()));
+        let (items, _) = query_page(&conn, 0, 20, None, None, None).unwrap();
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn delete_of_a_missing_item_is_a_noop() {
+        let conn = mem_db();
+        assert_eq!(delete(&conn, 999).unwrap(), None);
+    }
+
+    #[test]
+    fn groups_are_listed_by_name_and_names_are_unique() {
+        let conn = mem_db();
+        create_group(&conn, "beta").unwrap();
+        create_group(&conn, "Alfa").unwrap();
+        let names: Vec<String> = list_groups(&conn).unwrap().into_iter().map(|g| g.name).collect();
+        assert_eq!(names, vec!["Alfa".to_string(), "beta".to_string()]);
+        assert!(create_group(&conn, "beta").is_err());
+    }
+
+    #[test]
+    fn search_treats_user_input_as_data_not_sql() {
+        let conn = mem_db();
+        insert_or_touch(&conn, &text_item("normal")).unwrap();
+        let (items, _) =
+            query_page(&conn, 0, 20, Some("'; DROP TABLE clipboard_history; --"), None, None).unwrap();
+        assert!(items.is_empty());
+        let (items, _) = query_page(&conn, 0, 20, None, None, None).unwrap();
+        assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn blank_search_and_empty_type_filter_are_ignored() {
+        let conn = mem_db();
+        insert_or_touch(&conn, &text_item("um")).unwrap();
+        let (items, _) = query_page(&conn, 0, 20, Some("   "), Some(""), None).unwrap();
+        assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn unknown_stored_kinds_fall_back_to_text() {
+        assert_eq!(ClipKind::from_db("desconhecido"), ClipKind::Text);
+        assert_eq!(ClipKind::from_db("link"), ClipKind::Link);
+        assert_eq!(ClipKind::Image.as_str(), "image");
+    }
 }

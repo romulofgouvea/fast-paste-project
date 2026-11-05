@@ -39,6 +39,9 @@ pub fn delete_item(state: State<'_, AppState>, id: i64) -> Result<(), AppError> 
         let conn = state.db()?;
         db::delete(&conn, id)?
     };
+    if let Ok(mut cache) = state.thumb_cache() {
+        cache.pop(&id);
+    }
     if let Some(path) = file_path {
         let _ = std::fs::remove_file(path);
     }
